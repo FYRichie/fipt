@@ -29,17 +29,17 @@ This repo contains the demo code for [FIPT](https://jerrypiglet.github.io/fipt-u
 
 ## Setup
 
-* python 3.8
-* pytorch 1.13.1
-* pytorch-lightning 1.9 # works with torch 1.13.1: https://lightning.ai/docs/pytorch/stable/versioning.html#compatibility-matrix
+* python 3.11
+* pytorch 2.7.1
+* pytorch-lightning 2.5 # works with torch 2.7.1: https://lightning.ai/docs/pytorch/stable/versioning.html#compatibility-matrix
 * torch-scatter 2.1.0
 * mitsuba 3.2.1
-* CUDA 11.7
+* CUDA 12.8
 
 Set up the environment via:
 
 ``` bash
-conda create --name fipt python=3.8 pip
+conda create --name fipt python=3.11 pip
 conda activate fipt
 # firstly, install torch==1.31.1 according to your platform; check: https://pytorch.org/get-started/previous-versions/
 pip install -r requirements.txt

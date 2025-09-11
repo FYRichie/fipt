@@ -1,6 +1,6 @@
-# torch==1.13.1
-# torchvision==0.14.1
-pytorch-lightning==1.9
+torch==2.7.1
+torchvision==0.22.1
+pytorch-lightning==2.5
 mitsuba==3.2.1
 
 opencv-python==4.7.0.72
