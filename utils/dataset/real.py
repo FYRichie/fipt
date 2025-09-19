@@ -298,7 +298,7 @@ class InvRealDataset(Dataset):
 
             idx = self.idxs[b0:b1]
             tmp = self.all_rays[idx]
-            return {"rays": tmp[..., :12], "diffuse": tmp[..., 12:15], "specular0": tmp[..., 15:33].reshape(b1 - b0, -1, 3), "specular1": tmp[..., 33:51].reshape(b1 - b0, -1, 3), "segmentation": tmp[..., 51], "rgbs": tmp[..., 52:55], "albedo": tmp[55:58]}
+            return {"rays": tmp[..., :12], "diffuse": tmp[..., 12:15], "specular0": tmp[..., 15:33].reshape(b1 - b0, -1, 3), "specular1": tmp[..., 33:51].reshape(b1 - b0, -1, 3), "segmentation": tmp[..., 51], "rgbs": tmp[..., 52:55], "albedo": tmp[..., 55:58]}
 
         k = self.Ks[idx]
         c2w = self.C2Ws[idx]
