@@ -32,9 +32,10 @@ from model.brdf import NGPBRDF
 class ModelTrainer(pl.LightningModule):
     """BRDF-emission mask training code"""
 
-    def __init__(self, hparams: Namespace, *args, **kwargs):
+    def __init__(self, hparams: Namespace, use_albedo: bool, *args, **kwargs):
         super(ModelTrainer, self).__init__()
         self.save_hyperparameters(hparams)
+        self.use_albedo = use_albedo
 
         # load scene geometry
         self.scene = mitsuba.load_dict({"type": "scene", "shape_id": {"type": "obj", "filename": os.path.join(hparams.dataset[1], "scene.obj")}})
@@ -59,34 +60,28 @@ class ModelTrainer(pl.LightningModule):
         scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=self.hparams.milestones, gamma=self.hparams.scheduler_rate)
         return [optimizer], [scheduler]
 
-    def train_dataloader(
-        self,
-    ):
+    def train_dataloader(self):
         dataset_name, dataset_path, cache_path = self.hparams.dataset
 
         if dataset_name == "synthetic":
             dataset = InvSyntheticDataset(dataset_path, cache_path, pixel=True, split="train", batch_size=self.hparams.batch_size, has_part=self.hparams.has_part)
         elif dataset_name == "real":
-            dataset = InvRealDataset(dataset_path, cache_path, pixel=True, split="train", batch_size=self.hparams.batch_size)
+            dataset = InvRealDataset(dataset_path, cache_path, pixel=True, split="train", batch_size=self.hparams.batch_size, use_albedo=self.use_albedo)
 
         return DataLoader(dataset, batch_size=None, num_workers=self.hparams.num_workers)
 
-    def on_train_epoch_start(
-        self,
-    ):
+    def on_train_epoch_start(self):
         """resample training batch"""
         self.train_dataloader().dataset.resample()
 
-    def val_dataloader(
-        self,
-    ):
+    def val_dataloader(self):
         dataset_name, dataset_path, cache_path = self.hparams.dataset
         self.dataset_name = dataset_name
 
         if dataset_name == "synthetic":
             dataset = SyntheticDataset(dataset_path, pixel=False, split="val")
         elif dataset_name == "real":
-            dataset = RealDataset(dataset_path, pixel=False, split="val")
+            dataset = RealDataset(dataset_path, pixel=False, split="val", use_albedo=self.use_albedo)
 
         self.img_hw = dataset.img_hw
         return DataLoader(dataset, shuffle=False, batch_size=None, num_workers=self.hparams.num_workers)
@@ -109,7 +104,7 @@ class ModelTrainer(pl.LightningModule):
         xs, ds = rays[..., :3], rays[..., 3:6]
         ds = NF.normalize(ds, dim=-1)
 
-        if self.dataset_name == "synthetic":  # only available for synthetic scene
+        if self.dataset_name == "synthetic" or self.use_albedo:  # only available for synthetic scene
             albedos_gt = batch["albedo"]
 
         # fetch shadings
@@ -133,7 +128,7 @@ class ModelTrainer(pl.LightningModule):
         diffuse = diffuse[valid]
         specular0 = specular0[valid]
         specular1 = specular1[valid]
-        if self.dataset_name == "synthetic":
+        if self.dataset_name == "synthetic" or self.use_albedo:
             albedos_gt = albedos_gt[valid]
 
         segmentation = segmentation[valid]
@@ -238,9 +233,10 @@ class ModelTrainer(pl.LightningModule):
         psnr = -10.0 * math.log10(loss_c.clamp_min(1e-5))
         loss = loss_c + loss_e + loss_d + loss_seg
 
-        if self.dataset_name == "synthetic":
+        if self.dataset_name == "synthetic" or self.use_albedo:
             albedo_loss = NF.mse_loss(albedos_gt, kd.data)
             self.log("train/albedo", albedo_loss)
+            loss = loss + albedo_loss
         self.log("train/loss", loss)
         self.log("train/psnr", psnr)
         return loss
@@ -271,7 +267,7 @@ class ModelTrainer(pl.LightningModule):
         albedo = torch.zeros(len(valid), 3, device=valid.device)
         albedo[valid] = albedo_
 
-        if self.dataset_name == "synthetic":
+        if self.dataset_name == "synthetic" or self.use_albedo:
             albedo_gt = batch["albedo"]
         else:  # show rgb is no ground truth kd
             albedo_gt = rgb_gt.pow(1 / 2.2).clamp(0, 1)
@@ -319,6 +315,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_path", type=str, default="./checkpoints")
     parser.add_argument("--resume", dest="resume", action="store_true")
     parser.add_argument("--device", type=int, required=False, default=None)
+    parser.add_argument("--use_albedo", type=bool, default=True)
 
     parser.set_defaults(resume=False)
     args = parser.parse_args()
@@ -341,19 +338,7 @@ if __name__ == "__main__":
         last_ckpt = str(last_ckpt)
 
     # setup model trainer
-    model = ModelTrainer(hparams)
-
-    # trainer = Trainer.from_argparse_args(
-    #     args,
-    #     resume_from_checkpoint=last_ckpt,
-    #     logger=logger,
-    #     checkpoint_callback=checkpoint_callback,
-    #     flush_logs_every_n_steps=1,
-    #     log_every_n_steps=1,
-    #     max_epochs=args.max_epochs
-    # )
-
-    # trainer.fit(model)
+    model = ModelTrainer(hparams, args.use_albedo)
 
     # Update to lightning 1.9
     trainer = Trainer(
@@ -364,22 +349,7 @@ if __name__ == "__main__":
         max_epochs=args.max_epochs,
         log_every_n_steps=1,
     )
-    # trainer = Trainer.from_argparse_args(
-    #     args,
-    #     accelerator="gpu",
-    #     devices=[0],
-    #     gpus=None,
-    #     logger=logger,
-    #     callbacks=[checkpoint_callback],
-    #     log_every_n_steps=1,
-    #     max_epochs=args.max_epochs,
-    # )
 
     start_time = time.time()
-
-    trainer.fit(
-        model,
-        ckpt_path=last_ckpt,
-    )
-
+    trainer.fit(model, ckpt_path=last_ckpt)
     print("[train - BRDF-emission] time (s): ", time.time() - start_time)

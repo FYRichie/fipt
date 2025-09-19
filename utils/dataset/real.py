@@ -81,17 +81,19 @@ class RealDataset(Dataset):
         scene.obj Scene mesh
     """
 
-    def __init__(self, root_dir, split="train", pixel=True, ray_diff=False):
+    def __init__(self, root_dir, split="train", pixel=True, ray_diff=False, use_albedo=True):
         """
         Args:
             root_dir: dataset root folder
             split: train or val
             pixel: whether load every camera pixel
             ray_diff: whether return ray differentials
+            use_albedo: HyperSim dataset provides ground-truth albedo.
         """
         self.root_dir = root_dir
         self.pixel = pixel
         self.split = split
+        self.use_albedo = (not pixel) and use_albedo
 
         # find image hight x width
         self.img_hw = cv2.imread(os.path.join(root_dir, "Image/000_0001.exr"), -1).shape[:2]
@@ -167,6 +169,9 @@ class RealDataset(Dataset):
         img = open_exr(Path(self.root_dir, "Image", "{:03d}_0001.exr".format(idx)), img_hw).reshape(-1, 3).clamp_min(0)
         rays_d = get_direction(k, img_hw)
 
+        if self.use_albedo:
+            albedo = open_exr(Path(self.root_dir, "albedo", f"{idx:03d}.exr"), img_hw).reshape(-1, 3)
+
         if self.ray_diff:
             rays_x, rays_d, dxdu, dydv = to_world(rays_d, c2w, self.ray_diff, k)
             rays = torch.cat([rays_x, rays_d, dxdu, dydv], -1)
@@ -178,6 +183,7 @@ class RealDataset(Dataset):
             "rgbs": img,
             "c2w": c2w,
             "img_hw": img_hw,
+            "albedo": albedo if self.use_albedo else None,
         }
 
 
@@ -189,7 +195,7 @@ class InvRealDataset(Dataset):
         specular/{:03d}_i_j.exr specular shadings (L_s^i(\sigma_j))
     """
 
-    def __init__(self, root_dir, cache_dir, batch_size=None, split="train", pixel=True):
+    def __init__(self, root_dir, cache_dir, batch_size=None, split="train", pixel=True, use_albedo=True):
         """
         Args:
             root_dir: dataset root folder
@@ -197,12 +203,14 @@ class InvRealDataset(Dataset):
             split: train or val
             pixel: whether load every camera pixel
             batch_size: size of each ray batch if pixel==True
+            use_albedo: HyperSim dataset provides ground-truth albedo.
         """
         self.root_dir = root_dir
         self.cache_dir = cache_dir
         self.pixel = pixel
         self.split = split
         self.ray_diff = True
+        self.use_albedo = (not pixel) and use_albedo
 
         self.img_hw = cv2.imread(os.path.join(root_dir, "Image/000_0001.exr"), -1).shape[:2]
         self.batch_size = batch_size
@@ -259,9 +267,12 @@ class InvRealDataset(Dataset):
                 # segmentation mask
                 segmentation = torch.from_numpy(cv2.imread(os.path.join(self.root_dir, "segmentation", "{:03d}.exr".format(idx)), -1)).reshape(-1, 1).float()
 
+                # albedo
+                albedo = open_exr(Path(self.root_dir, "albedo", f"{idx:03d}.exr"), img_hw).reshape(-1, 3) if self.use_albedo else torch.zeros_like(img)
+
                 rays_d = get_direction(k, img_hw)
                 rays_x, rays_d, dxdu, dydv = to_world(rays_d, c2w, self.ray_diff, k)
-                self.all_rays.append(torch.cat([rays_x, rays_d, dxdu, dydv, diffuse, speculars0, speculars1, segmentation, img], -1))
+                self.all_rays.append(torch.cat([rays_x, rays_d, dxdu, dydv, diffuse, speculars0, speculars1, segmentation, img, albedo], -1))
             self.all_rays = torch.cat(self.all_rays, 0)
 
             # number of pixel batches
@@ -272,9 +283,7 @@ class InvRealDataset(Dataset):
         """resample pixel batch"""
         self.idxs = torch.randperm(len(self.all_rays))
 
-    def __len__(
-        self,
-    ):
+    def __len__(self):
         if self.pixel == True:
             return self.batch_num
         if self.split == "val":
@@ -289,12 +298,15 @@ class InvRealDataset(Dataset):
 
             idx = self.idxs[b0:b1]
             tmp = self.all_rays[idx]
-            return {"rays": tmp[..., :12], "diffuse": tmp[..., 12:15], "specular0": tmp[..., 15:33].reshape(b1 - b0, -1, 3), "specular1": tmp[..., 33:51].reshape(b1 - b0, -1, 3), "segmentation": tmp[..., 51], "rgbs": tmp[..., 52:55]}
+            return {"rays": tmp[..., :12], "diffuse": tmp[..., 12:15], "specular0": tmp[..., 15:33].reshape(b1 - b0, -1, 3), "specular1": tmp[..., 33:51].reshape(b1 - b0, -1, 3), "segmentation": tmp[..., 51], "rgbs": tmp[..., 52:55], "albedo": tmp[55:58]}
 
         k = self.Ks[idx]
         c2w = self.C2Ws[idx]
         img_hw = self.img_hw
         img = open_exr(Path(self.root_dir, "Image", "{:03d}_0001.exr".format(idx)), img_hw).reshape(-1, 3).clamp_min(0)
+
+        if self.use_albedo:
+            albedo = open_exr(Path(self.root_dir, "albedo", f"{idx:03d}.exr"), img_hw).reshape(-1, 3)
 
         diffuse = open_exr(Path(self.cache_dir, "diffuse", "{:03d}.exr".format(idx)), img_hw).reshape(-1, 3)
         speculars0, speculars1 = [], []
@@ -324,4 +336,5 @@ class InvRealDataset(Dataset):
             "specular1": speculars1,
             "segmentation": segmentation,
             "img_hw": img_hw,
+            "albedo": albedo if self.use_albedo else None,
         }
